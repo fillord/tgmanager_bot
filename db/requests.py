@@ -4,7 +4,7 @@ from sqlalchemy import update, select, delete, func as sql_func, text, insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from db.models import Base, Chat, StopWord, Warning, User, UserProfile, Message
+from db.models import Base, Chat, StopWord, Warning, User, UserProfile, Message, Note, Trigger
 from datetime import datetime, timedelta
 
 db_url = (
@@ -44,6 +44,52 @@ async def update_chat_setting(chat_id: int, setting_name: str, value):
             )
             await conn.execute(stmt)
             await conn.commit()
+
+# --- Функции для системы уровней (XP) ---
+
+def calculate_xp_for_next_level(level: int) -> int:
+    """Формула для расчета необходимого опыта для следующего уровня."""
+    return 5 * (level ** 2) + 50 * level + 100
+
+async def add_xp(user_id: int, chat_id: int, amount: int) -> tuple[int, bool]:
+    """
+    Добавляет опыт пользователю и проверяет, не повысился ли уровень.
+    Возвращает (новый уровень, флаг повышения уровня).
+    """
+    async with engine.connect() as conn:
+        profile = await get_or_create_user_profile(user_id, chat_id)
+        
+        current_level = profile.level
+        new_xp = profile.xp + amount
+        xp_needed = calculate_xp_for_next_level(current_level)
+        
+        leveled_up = False
+        while new_xp >= xp_needed:
+            current_level += 1
+            new_xp -= xp_needed
+            xp_needed = calculate_xp_for_next_level(current_level)
+            leveled_up = True
+
+        stmt = update(UserProfile).where(
+            UserProfile.user_id == user_id,
+            UserProfile.chat_id == chat_id
+        ).values(level=current_level, xp=new_xp)
+        
+        await conn.execute(stmt)
+        await conn.commit()
+        
+        return current_level, leveled_up
+
+async def get_top_users_by_xp(chat_id: int, limit: int = 10):
+    """Получает топ пользователей по уровню и опыту."""
+    async with engine.connect() as conn:
+        stmt = select(UserProfile).where(UserProfile.chat_id == chat_id).order_by(
+            UserProfile.level.desc(),
+            UserProfile.xp.desc()
+        ).limit(limit)
+        
+        result = await conn.execute(stmt)
+        return result.all()
 
 async def add_stop_word(chat_id: int, word: str):
     """Добавляет стоп-слово для конкретного чата."""
@@ -222,6 +268,69 @@ async def count_user_messages(user_id: int, chat_id: int):
         )
         result = await conn.execute(stmt)
         return result.scalar_one()
+
+async def add_note(chat_id: int, name: str, content: str) -> bool:
+    """Добавляет или обновляет заметку."""
+    async with engine.connect() as conn:
+        stmt_select = select(Note).where(Note.chat_id == chat_id, Note.name == name)
+        existing_note = (await conn.execute(stmt_select)).first()
+        if existing_note:
+            stmt_update = update(Note).where(Note.id == existing_note.id).values(content=content)
+            await conn.execute(stmt_update)
+        else:
+            stmt_insert = pg_insert(Note).values(chat_id=chat_id, name=name, content=content)
+            await conn.execute(stmt_insert)
+        await conn.commit()
+        return not existing_note
+
+async def delete_note(chat_id: int, name: str) -> bool:
+    """Удаляет заметку."""
+    async with engine.connect() as conn:
+        stmt = delete(Note).where(Note.chat_id == chat_id, Note.name == name)
+        result = await conn.execute(stmt)
+        await conn.commit()
+        return result.rowcount > 0
+
+async def get_note(chat_id: int, name: str):
+    """Получает одну заметку."""
+    async with engine.connect() as conn:
+        stmt = select(Note.content).where(Note.chat_id == chat_id, Note.name == name)
+        return (await conn.execute(stmt)).scalar_one_or_none()
+
+async def get_all_notes(chat_id: int):
+    """Получает все заметки в чате."""
+    async with engine.connect() as conn:
+        stmt = select(Note.name).where(Note.chat_id == chat_id).order_by(Note.name)
+        return [row.name for row in (await conn.execute(stmt)).all()]
+
+# --- Функции для Триггеров (Triggers) ---
+
+async def add_trigger(chat_id: int, keyword: str, response: str) -> bool:
+    """Добавляет или обновляет триггер."""
+    async with engine.connect() as conn:
+        stmt_select = select(Trigger).where(Trigger.chat_id == chat_id, Trigger.keyword == keyword)
+        existing = (await conn.execute(stmt_select)).first()
+        if existing:
+            await conn.execute(update(Trigger).where(Trigger.id == existing.id).values(response=response))
+        else:
+            await conn.execute(pg_insert(Trigger).values(chat_id=chat_id, keyword=keyword, response=response))
+        await conn.commit()
+        return not existing
+
+async def delete_trigger(chat_id: int, keyword: str) -> bool:
+    """Удаляет триггер."""
+    async with engine.connect() as conn:
+        stmt = delete(Trigger).where(Trigger.chat_id == chat_id, Trigger.keyword == keyword)
+        result = await conn.execute(stmt)
+        await conn.commit()
+        return result.rowcount > 0
+
+async def get_all_triggers(chat_id: int) -> dict:
+    """Получает все триггеры в чате в виде словаря."""
+    async with engine.connect() as conn:
+        stmt = select(Trigger.keyword, Trigger.response).where(Trigger.chat_id == chat_id)
+        result = await conn.execute(stmt)
+        return {row.keyword: row.response for row in result.all()}
 
 async def get_chat_settings(chat_id: int):
     """Получает все настройки для чата."""

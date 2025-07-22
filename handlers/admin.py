@@ -15,7 +15,7 @@ from db.requests import (
 )
 from utils.time_parser import parse_time
 from .callbacks import get_settings_keyboard
-# Импортируем кэш из модуля фильтров
+from .utils import is_admin 
 from .filters import stop_words_cache
 router = Router()
 

@@ -9,9 +9,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # Импортируем наши роутеры, включая новый 'events'
-from handlers import user, admin, callbacks, events, filters as msg_filters
+from handlers import user, admin, callbacks, events, notes_and_triggers, filters as msg_filters
 from middlewares.antiflood import AntiFloodMiddleware
-from db.requests import create_tables, upsert_user, get_or_create_user_profile, log_message, get_chat_settings
+from db.requests import create_tables, upsert_user, get_or_create_user_profile, log_message, get_chat_settings, add_xp
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,10 +42,23 @@ async def main():
     # Этот обработчик будет срабатывать на КАЖДОЕ сообщение
     @dp.message.middleware()
     async def user_register_middleware(handler, event: types.Message, data):
+        # Пропускаем команды, чтобы за них не начислялся опыт
+        if event.text and event.text.startswith('/'):
+            return await handler(event, data)
+
+        bot = data['bot']
         await upsert_user(event.from_user)
         if event.chat.type != 'private':
             await get_or_create_user_profile(event.from_user.id, event.chat.id)
             await log_message(event.chat.id, event.from_user.id)
+            
+            # Начисляем опыт за сообщение
+            new_level, leveled_up = await add_xp(event.from_user.id, event.chat.id, 1) # 1 XP за сообщение
+            
+            # Если уровень повысился, поздравляем
+            if leveled_up:
+                await event.answer(f"🎉 Поздравляем {event.from_user.mention_html()}, вы достигли {new_level} уровня!", parse_mode="HTML")
+
         return await handler(event, data)
 
     # Регистрируем антифлуд
@@ -56,6 +69,7 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(callbacks.router)
     dp.include_router(events.router)
+    dp.include_router(notes_and_triggers.router)
     # Фильтры должны идти последними, чтобы не перехватывать команды
     dp.include_router(msg_filters.router)
 

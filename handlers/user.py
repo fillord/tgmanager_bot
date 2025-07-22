@@ -8,7 +8,9 @@ from aiogram.utils.markdown import hbold
 from db.requests import (
     get_or_create_user_profile, 
     get_chat_stats, 
-    get_user_first_name
+    get_user_first_name,
+    calculate_xp_for_next_level, # <-- Новый импорт
+    get_top_users_by_xp
 )
 
 # Создаем "роутер" для команд пользователей
@@ -52,3 +54,31 @@ async def cmd_userrep(message: types.Message):
     target_user = message.reply_to_message.from_user
     profile = await get_or_create_user_profile(target_user.id, message.chat.id)
     await message.reply(f"Репутация {hbold(target_user.full_name)}: {profile.reputation}", parse_mode="HTML")
+
+@router.message(Command("rank"))
+async def cmd_rank(message: types.Message):
+    """Показывает текущий уровень и опыт пользователя."""
+    profile = await get_or_create_user_profile(message.from_user.id, message.chat.id)
+    xp_needed = calculate_xp_for_next_level(profile.level)
+    
+    text = (
+        f"🏆 Ваш ранг\n\n"
+        f"<b>Уровень:</b> {profile.level}\n"
+        f"<b>Опыт:</b> {profile.xp} / {xp_needed}"
+    )
+    await message.reply(text, parse_mode="HTML")
+
+@router.message(Command("top"))
+async def cmd_top(message: types.Message):
+    """Показывает топ-10 самых активных пользователей чата."""
+    top_users = await get_top_users_by_xp(message.chat.id, limit=10)
+    
+    if not top_users:
+        return await message.reply("В этом чате пока нет статистики.")
+
+    text = ["🏆 <b>Топ активных пользователей:</b>\n"]
+    for i, profile in enumerate(top_users, 1):
+        user_name = await get_user_first_name(profile.user_id)
+        text.append(f"{i}. {html.escape(user_name)} - {profile.level} уровень ({profile.xp} XP)")
+        
+    await message.answer("\n".join(text), parse_mode="HTML")

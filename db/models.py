@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, DateTime, JSON, ForeignKey, Integer
+from sqlalchemy import Column, BigInteger, String, DateTime, JSON, ForeignKey, Integer, Text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 
@@ -11,7 +11,8 @@ class Chat(Base):
         'welcome_message': 'Приветствуем в чате!',
         'warn_limit': 3,
         'antilink_enabled': False,
-        'log_channel_id': None  # <-- НОВАЯ НАСТРОЙКА
+        'log_channel_id': None,
+        'captcha_enabled': False  # <-- НОВАЯ НАСТРОЙКА
     }) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -41,6 +42,8 @@ class UserProfile(Base):
     user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
     reputation = Column(Integer, default=0, nullable=False)
+    level = Column(Integer, default=1, nullable=False)
+    xp = Column(Integer, default=0, nullable=False)
 
 class Message(Base):
     __tablename__ = "messages"
@@ -48,3 +51,18 @@ class Message(Base):
     chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
     user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+class Note(Base):
+    __tablename__ = "notes"
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(50), nullable=False)
+    content = Column(Text, nullable=False)
+
+# НОВАЯ ТАБЛИЦА для Триггеров
+class Trigger(Base):
+    __tablename__ = "triggers"
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
+    keyword = Column(String(100), nullable=False)
+    response = Column(Text, nullable=False)

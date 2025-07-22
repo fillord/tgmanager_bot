@@ -129,7 +129,6 @@ async def cmd_info(message: types.Message):
     
     await message.answer("\n".join(text), parse_mode="HTML")
 
-
 # --- КОМАНДЫ РЕПУТАЦИИ ---
 @dp.message(Command("myrep"))
 async def cmd_myrep(message: types.Message):

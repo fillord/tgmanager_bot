@@ -13,7 +13,7 @@ from aiogram.types import Message, ChatPermissions
 user_messages = defaultdict(lambda: defaultdict(list))
 
 class AntiFloodMiddleware(BaseMiddleware):
-    MSG_LIMIT = 5
+    MSG_LIMIT = 3
     TIME_LIMIT_SECONDS = 2
     MUTE_DURATION_MINUTES = 2
 

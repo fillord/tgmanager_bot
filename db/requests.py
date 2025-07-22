@@ -4,7 +4,8 @@ from sqlalchemy import update, select, delete, func as sql_func, text, insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from db.models import Base, Chat, StopWord, Warning, User, UserProfile
+from db.models import Base, Chat, StopWord, Warning, User, UserProfile, Message
+from datetime import datetime, timedelta
 
 db_url = (
     f"postgresql+asyncpg://{os.getenv('DB_USER')}:{os.getenv('DB_PASS')}@"
@@ -166,6 +167,61 @@ async def update_reputation(user_id: int, chat_id: int, amount: int):
         ).values(reputation=UserProfile.reputation + amount)
         await conn.execute(stmt)
         await conn.commit()
+
+async def log_message(chat_id: int, user_id: int):
+    """Записывает каждое новое сообщение в БД для статистики."""
+    async with engine.connect() as conn:
+        stmt = pg_insert(Message).values(chat_id=chat_id, user_id=user_id)
+        await conn.execute(stmt)
+        await conn.commit()
+
+async def get_chat_stats(chat_id: int):
+    """Собирает статистику по чату."""
+    async with engine.connect() as conn:
+        # Общее количество сообщений
+        total_stmt = select(sql_func.count(Message.id)).where(Message.chat_id == chat_id)
+        total_messages = (await conn.execute(total_stmt)).scalar_one()
+
+        # Сообщения за 24 часа
+        day_ago = datetime.utcnow() - timedelta(days=1)
+        day_stmt = select(sql_func.count(Message.id)).where(
+            Message.chat_id == chat_id,
+            Message.timestamp >= day_ago
+        )
+        day_messages = (await conn.execute(day_stmt)).scalar_one()
+
+        # Топ-5 активных пользователей
+        top_users_stmt = select(
+            Message.user_id,
+            sql_func.count(Message.id).label('msg_count')
+        ).where(Message.chat_id == chat_id).group_by(Message.user_id).order_by(sql_func.count(Message.id).desc()).limit(5)
+        
+        top_users_result = await conn.execute(top_users_stmt)
+        top_users = top_users_result.all()
+
+        return {
+            "total": total_messages,
+            "last_24h": day_messages,
+            "top_users": top_users
+        }
+        
+async def get_user_first_name(user_id: int) -> str:
+    """Получает имя пользователя по его ID."""
+    async with engine.connect() as conn:
+        stmt = select(User.first_name).where(User.user_id == user_id)
+        result = await conn.execute(stmt)
+        user = result.first()
+        return user.first_name if user else f"User {user_id}"
+
+async def count_user_messages(user_id: int, chat_id: int):
+    """Считает общее количество сообщений от пользователя в чате."""
+    async with engine.connect() as conn:
+        stmt = select(sql_func.count(Message.id)).where(
+            Message.user_id == user_id,
+            Message.chat_id == chat_id
+        )
+        result = await conn.execute(stmt)
+        return result.scalar_one()
 
 async def get_chat_settings(chat_id: int):
     """Получает все настройки для чата."""

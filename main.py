@@ -2,7 +2,7 @@ import asyncio
 import os
 import logging
 import html
-from datetime import datetime, timedelta
+from datetime import timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,30 +13,63 @@ from aiogram.enums import ChatMemberStatus
 from aiogram.utils.markdown import hbold
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
+# НОВЫЕ ИМПОРТЫ для FSM
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+from middlewares.antiflood import AntiFloodMiddleware
 from db.requests import (
     add_chat, create_tables, update_chat_setting, 
     add_stop_word, delete_stop_word, get_stop_words,
     add_warning, count_warnings, get_chat_settings, remove_last_warning,
-    upsert_user, get_or_create_user_profile, update_reputation, clear_warnings
+    upsert_user, get_or_create_user_profile, update_reputation, clear_warnings,
+    log_message, get_chat_stats, get_user_first_name, count_user_messages
 )
 from utils.time_parser import parse_time
+# ИМПОРТ состояний
+from states import Settings
 
 logging.basicConfig(level=logging.INFO)
 
+# ИНИЦИАЛИЗАЦИЯ FSM
+storage = MemoryStorage()
 bot = Bot(token=os.getenv("BOT_TOKEN"))
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)
+dp.message.middleware(AntiFloodMiddleware())
 stop_words_cache = {}
-
 
 
 @dp.message.middleware()
 async def user_register_middleware(handler, event, data):
     # Добавляем или обновляем пользователя в БД
     await upsert_user(event.from_user)
-    # Создаем его профиль в чате, если еще нет
-    await get_or_create_user_profile(event.from_user.id, event.chat.id)
+    if event.chat.type != 'private':
+        # Создаем его профиль в чате, если еще нет
+        await get_or_create_user_profile(event.from_user.id, event.chat.id)
+        # ЛОГИРУЕМ СООБЩЕНИЕ ДЛЯ СТАТИСТИКИ
+        await log_message(event.chat.id, event.from_user.id)
     return await handler(event, data)
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+
+    stats = await get_chat_stats(message.chat.id)
+    
+    top_users_text = []
+    for i, user in enumerate(stats['top_users'], 1):
+        user_id, msg_count = user
+        # Получаем имя пользователя из нашей таблицы users
+        first_name = await get_user_first_name(user_id)
+        top_users_text.append(f"{i}. {html.escape(first_name)} - {msg_count} сообщ.")
+
+    text = [
+        "📊 **Статистика чата**\n",
+        f"Всего сообщений: <code>{stats['total']}</code>",
+        f"Сообщений за 24 часа: <code>{stats['last_24h']}</code>",
+        "\n<b>Топ-5 активных пользователей:</b>",
+        "\n".join(top_users_text) if top_users_text else "Пока нет данных"
+    ]
+
+    await message.answer("\n".join(text), parse_mode="HTML")
 
 async def on_startup(dispatcher):
     await create_tables()
@@ -70,6 +103,32 @@ async def cmd_set_log_channel(message: types.Message):
     except Exception as e:
         logging.error(e)
         await message.answer("Не удалось подключить канал. Убедитесь, что ID верный и бот добавлен в канал как администратор.")
+
+@dp.message(Command("info"))
+async def cmd_info(message: types.Message):
+    if not await is_admin(message): return
+    if not message.reply_to_message:
+        return await message.reply("Эта команда должна быть ответом на сообщение пользователя.")
+
+    target_user = message.reply_to_message.from_user
+    chat_id = message.chat.id
+    
+    # Собираем всю информацию
+    profile = await get_or_create_user_profile(target_user.id, chat_id)
+    warnings_count = await count_warnings(target_user.id, chat_id)
+    message_count = await count_user_messages(target_user.id, chat_id)
+    
+    # Формируем текст ответа
+    text = [
+        f"👤 <b>Информация о пользователе:</b> {target_user.mention_html()}",
+        f"<b>ID:</b> <code>{target_user.id}</code>",
+        f"<b>Репутация:</b> {profile.reputation}",
+        f"<b>Предупреждения:</b> {warnings_count}",
+        f"<b>Всего сообщений:</b> {message_count}"
+    ]
+    
+    await message.answer("\n".join(text), parse_mode="HTML")
+
 
 # --- КОМАНДЫ РЕПУТАЦИИ ---
 @dp.message(Command("myrep"))
@@ -146,32 +205,38 @@ async def is_admin(message: types.Message) -> bool:
 
 async def get_settings_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     settings = await get_chat_settings(chat_id)
-    
-    # Текст кнопки зависит от текущего состояния
     antilink_status = "✅ Включена" if settings.get('antilink_enabled', False) else "❌ Выключена"
     
     builder = InlineKeyboardBuilder()
-    builder.add(
+    builder.row(
         InlineKeyboardButton(text=f"Защита от ссылок: {antilink_status}", callback_data="toggle_antilink"),
-        # В будущем можно добавить другие кнопки
-        # InlineKeyboardButton(text="Изменить лимит варнов", callback_data="change_warn_limit")
+        InlineKeyboardButton(text="Изменить лимит варнов", callback_data="change_warn_limit")
     )
-    builder.adjust(1) # Располагаем кнопки по одной в строке
     return builder.as_markup()
 
 @dp.message(Command("settings"))
 async def cmd_settings(message: types.Message):
-    if not await is_admin(message): return
+    # Проверка на админа больше не нужна здесь, 
+    # так как любой пользователь может посмотреть свои настройки.
+    # Права будут проверяться при нажатии на кнопки.
 
     chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    # Получаем все необходимые данные
     settings = await get_chat_settings(chat_id)
+    user_warnings = await count_warnings(user_id, chat_id) # <-- Получаем варны
+    
     warn_limit = settings.get('warn_limit', 3)
+    
+    # Формируем текст сообщения
     text = (
-        f"⚙️ <b>Настройки чата</b>\n\n"
-        f"• Лимит предупреждений: <code>{warn_limit}</code> (изменить: /set_warn_limit &lt;число&gt;)\n"
-        f"• Стоп-слова (управление: /add_word, /del_word, /list_words)\n\n"
-        f"Нажмите на кнопки ниже, чтобы управлять настройками:"
+        f"⚙️ <b>Настройки чата и ваш профиль</b>\n\n"
+        f"• Ваши предупреждения: <code>{user_warnings} / {warn_limit}</code>\n"
+        f"• Лимит предупреждений в чате: <code>{warn_limit}</code>\n\n"
+        f"Нажмите на кнопки ниже, чтобы управлять настройками (только для админов):"
     )
+    
     keyboard = await get_settings_keyboard(chat_id)
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
@@ -194,6 +259,41 @@ async def callback_toggle_antilink(callback: types.CallbackQuery):
     new_keyboard = await get_settings_keyboard(chat_id)
     await callback.message.edit_reply_markup(reply_markup=new_keyboard)
     await callback.answer() # Закрываем "часики" на кнопке
+
+@dp.callback_query(F.data == "change_warn_limit")
+async def callback_change_warn_limit(callback: types.CallbackQuery, state: FSMContext):
+    member = await callback.message.chat.get_member(callback.from_user.id)
+    if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
+        await callback.answer("Это действие доступно только администраторам.", show_alert=True)
+        return
+
+    await callback.message.edit_text("Пожалуйста, отправьте новое число для лимита предупреждений (например, 3).")
+    # Устанавливаем состояние ожидания
+    await state.set_state(Settings.waiting_for_warn_limit)
+    await callback.answer()
+
+# --- НОВЫЙ ОБРАБОТЧИК СОСТОЯНИЯ ---
+@dp.message(Settings.waiting_for_warn_limit)
+async def process_new_warn_limit(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.reply("Пожалуйста, введите число.")
+        return
+    
+    limit = int(message.text)
+    if limit < 1:
+        await message.reply("Лимит должен быть не меньше 1.")
+        return
+
+    chat_id = message.chat.id
+    await update_chat_setting(chat_id, 'warn_limit', limit)
+    
+    await message.answer(f"✅ Лимит предупреждений успешно изменен на {hbold(limit)}.", parse_mode="HTML")
+    
+    # Сбрасываем состояние
+    await state.clear()
+    
+    # Показываем обновленное меню настроек
+    await cmd_settings(message)
 
 
 async def process_warning(message: types.Message, user_to_warn: types.User):

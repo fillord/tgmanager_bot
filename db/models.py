@@ -41,3 +41,10 @@ class UserProfile(Base):
     user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
     reputation = Column(Integer, default=0, nullable=False)
+
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.chat_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

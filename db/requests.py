@@ -18,8 +18,9 @@ async def create_tables():
         await conn.run_sync(Base.metadata.create_all)
 
 async def add_chat(chat_id: int):
+    """Добавляет новый чат в базу данных."""
     async with engine.connect() as conn:
-        stmt = insert(Chat).values(chat_id=chat_id)
+        stmt = pg_insert(Chat).values(chat_id=chat_id) # <-- Исправлено
         stmt = stmt.on_conflict_do_nothing(index_elements=['chat_id'])
         await conn.execute(stmt)
         await conn.commit()

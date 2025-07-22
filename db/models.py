@@ -10,7 +10,8 @@ class Chat(Base):
     settings = Column(JSON, nullable=False, default={
         'welcome_message': 'Приветствуем в чате!',
         'warn_limit': 3,
-        'antilink_enabled': False # <-- НОВАЯ НАСТРОЙКА
+        'antilink_enabled': False,
+        'log_channel_id': None  # <-- НОВАЯ НАСТРОЙКА
     }) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

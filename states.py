@@ -4,9 +4,13 @@ from aiogram.fsm.state import State, StatesGroup
 class SettingsStates(StatesGroup):
     # Состояния для настроек
     waiting_for_warn_limit = State()
-    waiting_for_welcome_message = State()
     waiting_for_captcha_timeout = State()
     
+    # Состояния для контента
+    waiting_for_welcome_message = State()
+    waiting_for_rules_text = State()
+    waiting_for_goodbye_message = State()
+
     # Состояния для стоп-слов
     waiting_for_stop_word_to_add = State()
     waiting_for_stop_word_to_delete = State()

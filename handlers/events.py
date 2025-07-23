@@ -95,3 +95,21 @@ async def thanks_handler(message: types.Message):
         await message.reply_to_message.react([types.ReactionTypeEmoji(emoji="👍")])
     except Exception:
         pass
+
+@router.message(F.left_chat_member)
+async def left_chat_member_handler(message: types.Message, bot: Bot):
+    """
+    Обработчик для прощания с ушедшими участниками.
+    """
+    # Не реагируем на уход самого бота
+    bot_obj = await bot.get_me()
+    if message.left_chat_member.id == bot_obj.id:
+        return
+
+    settings = await get_chat_settings(message.chat.id)
+    goodbye_text = settings.get('goodbye_message')
+
+    # Отправляем сообщение, только если оно не пустое
+    if goodbye_text:
+        final_text = goodbye_text.replace("{user_mention}", message.left_chat_member.mention_html())
+        await message.answer(final_text, parse_mode="HTML")

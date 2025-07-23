@@ -13,7 +13,9 @@ class Chat(Base):
         'antilink_enabled': False,
         'log_channel_id': None,
         'captcha_enabled': False,
-        'captcha_timeout': 60  # <-- НОВАЯ НАСТРОЙКА
+        'captcha_timeout': 60,
+        'rules_text': 'Правила в этом чате еще не установлены.',
+        'goodbye_message': 'Пользователь {user_mention} покинул чат.'
     }) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -54,8 +54,10 @@ async def process_warning(message: types.Message, user_to_warn: types.User, bot:
 @router.message(Command("settings"))
 async def cmd_settings(message: types.Message, bot: Bot):
     if not await is_admin(message, bot): return
-    keyboard = await get_main_settings_keyboard()
-    await message.answer("⚙️ **Главное меню настроек**", reply_markup=keyboard)
+    
+    keyboard = await get_main_settings_keyboard(message.chat.id)
+    text = "PARAMETRY\n<b>Группа:</b> {chat_title}\n\nВыберите один из параметров, который вы хотите изменить.".format(chat_title=html.escape(message.chat.title))
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 @router.message(Command("set_log_channel"))
 async def cmd_set_log_channel(message: types.Message, bot: Bot, log_action: callable):

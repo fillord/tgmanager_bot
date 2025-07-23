@@ -12,7 +12,8 @@ from db.requests import (
     calculate_xp_for_next_level, # <-- Новый импорт
     get_top_users_by_xp,
     get_all_notes,      # <-- НОВЫЙ ИМПОРТ
-    get_all_triggers    # <-- НОВЫЙ ИМПОРТ
+    get_all_triggers,
+    get_chat_settings    # <-- НОВЫЙ ИМПОРТ
 )
 
 # Создаем "роутер" для команд пользователей
@@ -109,3 +110,9 @@ async def cmd_list_triggers(message: types.Message):
     )
     await message.reply(text, parse_mode="HTML")
 
+@router.message(Command("rules"))
+async def cmd_rules(message: types.Message):
+    """Показывает правила чата."""
+    settings = await get_chat_settings(message.chat.id)
+    rules_text = settings.get('rules_text', 'Правила в этом чате еще не установлены.')
+    await message.reply(rules_text, parse_mode="HTML")

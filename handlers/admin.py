@@ -1,6 +1,7 @@
 # handlers/admin.py
 
 import html
+import logging # <-- ДОБАВЛЕН ИМПОРТ
 from datetime import timedelta
 from aiogram import Router, Bot, types
 from aiogram.filters import Command
@@ -14,23 +15,12 @@ from db.requests import (
     get_stop_words, get_or_create_user_profile, count_user_messages
 )
 from utils.time_parser import parse_time
-from .callbacks import get_settings_keyboard
+from .callbacks import get_main_settings_keyboard
 from .utils import is_admin 
 from .filters import stop_words_cache
 router = Router()
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-
-async def is_admin(message: types.Message, bot: Bot) -> bool:
-    """Проверка прав администратора с ответом."""
-    if message.chat.type == 'private':
-        await message.answer("Эта команда работает только в группах.")
-        return False
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
-        await message.reply("Эту команду могут использовать только администраторы.")
-        return False
-    return True
 
 async def process_warning(message: types.Message, user_to_warn: types.User, bot: Bot, log_action_func: callable):
     """Общая функция для выдачи варна и проверки на бан."""
@@ -62,18 +52,38 @@ async def process_warning(message: types.Message, user_to_warn: types.User, bot:
 # --- КОМАНДЫ ---
 
 @router.message(Command("settings"))
-async def cmd_settings(message: types.Message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-    settings = await get_chat_settings(chat_id)
-    user_warnings = await count_warnings(user_id, chat_id)
-    warn_limit = settings.get('warn_limit', 3)
-    text = (f"⚙️ <b>Настройки чата и ваш профиль</b>\n\n"
-            f"• Ваши предупреждения: <code>{user_warnings} / {warn_limit}</code>\n"
-            f"• Лимит предупреждений в чате: <code>{warn_limit}</code>\n\n"
-            f"Нажмите на кнопки ниже, чтобы управлять настройками (только для админов):")
-    keyboard = await get_settings_keyboard(chat_id)
-    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+async def cmd_settings(message: types.Message, bot: Bot):
+    if not await is_admin(message, bot): return
+    keyboard = await get_main_settings_keyboard()
+    await message.answer("⚙️ **Главное меню настроек**", reply_markup=keyboard)
+
+@router.message(Command("set_log_channel"))
+async def cmd_set_log_channel(message: types.Message, bot: Bot, log_action: callable):
+    if not await is_admin(message, bot): return
+    try:
+        # Команда выглядит как /set_log_channel -100123456789
+        channel_id_str = message.text.split()[1]
+        if not (channel_id_str.startswith('-100') and channel_id_str[1:].isdigit()):
+             raise ValueError("ID канала должен быть отрицательным числом, начинающимся с -100.")
+        
+        channel_id = int(channel_id_str)
+        
+        # Простая проверка, что бот может отправить сообщение в этот канал
+        await bot.send_message(channel_id, "Канал для логов успешно подключен.")
+        
+        await update_chat_setting(message.chat.id, 'log_channel_id', channel_id)
+        await message.answer("✅ Канал для логов успешно установлен.")
+        
+        log_text = (f"⚙️ <b>Установлен канал для логов</b>\n"
+                    f"<b>Админ:</b> {message.from_user.mention_html()}\n"
+                    f"<b>ID канала:</b> <code>{channel_id}</code>")
+        await log_action(message.chat.id, log_text, bot)
+
+    except (IndexError, ValueError):
+        await message.answer("Неверный формат. Используйте: /set_log_channel <ID канала>\nID канала должен быть отрицательным числом, например, -100123456789.")
+    except Exception as e:
+        logging.error(f"Ошибка при подключении канала логов: {e}")
+        await message.answer("Не удалось подключить канал. Убедитесь, что ID верный и бот добавлен в канал как администратор с правом публикации сообщений.")
 
 @router.message(Command("warn"))
 async def cmd_warn(message: types.Message, bot: Bot, log_action: callable):
@@ -234,7 +244,6 @@ async def cmd_add_word(message: types.Message, bot: Bot, log_action: callable):
     try:
         word = message.text.split(maxsplit=1)[1].lower()
         if await add_stop_word(message.chat.id, word):
-            # ИСПРАВЛЕНИЕ: Обновляем кэш
             if message.chat.id not in stop_words_cache:
                 stop_words_cache[message.chat.id] = set()
             stop_words_cache[message.chat.id].add(word)
@@ -255,7 +264,6 @@ async def cmd_del_word(message: types.Message, bot: Bot, log_action: callable):
     try:
         word = message.text.split(maxsplit=1)[1].lower()
         if await delete_stop_word(message.chat.id, word):
-            # ИСПРАВЛЕНИЕ: Обновляем кэш
             if message.chat.id in stop_words_cache:
                 stop_words_cache[message.chat.id].discard(word)
 
@@ -277,22 +285,6 @@ async def cmd_list_words(message: types.Message, bot: Bot):
         return await message.answer("Черный список слов пуст.")
     text = "Текущие стоп-слова:\n\n" + "\n".join(f"• <code>{html.escape(word)}</code>" for word in words)
     await message.answer(text, parse_mode="HTML")
-
-@router.message(Command("set_welcome"))
-async def cmd_set_welcome(message: types.Message, bot: Bot, log_action: callable):
-    if not await is_admin(message, bot): return
-    welcome_text = message.text.split(maxsplit=1)
-    if len(welcome_text) < 2:
-        return await message.reply("Неверный формат.")
-    
-    text_to_save = welcome_text[1]
-    await update_chat_setting(message.chat.id, 'welcome_message', text_to_save)
-    await message.answer("✅ Новое приветственное сообщение установлено.")
-    
-    log_text = (f"⚙️ <b>Изменено приветствие</b>\n"
-                f"<b>Админ:</b> {message.from_user.mention_html()}\n"
-                f"<b>Новый текст:</b>\n<code>{html.escape(text_to_save)}</code>")
-    await log_action(message.chat.id, log_text, bot)
 
 @router.message(Command("info"))
 async def cmd_info(message: types.Message, bot: Bot):

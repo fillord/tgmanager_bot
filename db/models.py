@@ -12,7 +12,8 @@ class Chat(Base):
         'warn_limit': 3,
         'antilink_enabled': False,
         'log_channel_id': None,
-        'captcha_enabled': False  # <-- НОВАЯ НАСТРОЙКА
+        'captcha_enabled': False,
+        'captcha_timeout': 60  # <-- НОВАЯ НАСТРОЙКА
     }) 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

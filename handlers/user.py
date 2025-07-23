@@ -10,7 +10,9 @@ from db.requests import (
     get_chat_stats, 
     get_user_first_name,
     calculate_xp_for_next_level, # <-- Новый импорт
-    get_top_users_by_xp
+    get_top_users_by_xp,
+    get_all_notes,      # <-- НОВЫЙ ИМПОРТ
+    get_all_triggers    # <-- НОВЫЙ ИМПОРТ
 )
 
 # Создаем "роутер" для команд пользователей
@@ -82,3 +84,28 @@ async def cmd_top(message: types.Message):
         text.append(f"{i}. {html.escape(user_name)} - {profile.level} уровень ({profile.xp} XP)")
         
     await message.answer("\n".join(text), parse_mode="HTML")
+
+@router.message(Command("notes"))
+async def cmd_list_notes(message: types.Message):
+    """Показывает список доступных заметок."""
+    notes = await get_all_notes(message.chat.id)
+    if not notes:
+        return await message.reply("В этом чате еще нет заметок.")
+    
+    text = "📋 <b>Список доступных заметок:</b>\n\n" + "\n".join(
+        f"• <code>#{html.escape(note)}</code>" for note in notes
+    )
+    await message.reply(text, parse_mode="HTML")
+
+@router.message(Command("triggers"))
+async def cmd_list_triggers(message: types.Message):
+    """Показывает список настроенных триггеров."""
+    triggers = await get_all_triggers(message.chat.id)
+    if not triggers:
+        return await message.reply("В этом чате еще нет триггеров.")
+    
+    text = "🤖 <b>Список настроенных триггеров:</b>\n\n" + "\n".join(
+        f"• <code>{html.escape(keyword)}</code>" for keyword in triggers
+    )
+    await message.reply(text, parse_mode="HTML")
+

@@ -3,20 +3,17 @@
 import html
 import logging
 from aiogram import Router, F, types, Bot
-from aiogram.enums import ChatMemberStatus
 
 from db.requests import get_chat_settings, get_stop_words, get_all_triggers
 from .utils import is_user_admin_silent
-# Импортируем кэш триггеров из нового модуля
-from .notes_and_triggers import triggers_cache
 
 router = Router()
-stop_words_cache = {}
 
-async def is_user_admin_silent(chat: types.Chat, user_id: int, bot: Bot) -> bool:
-    """Тихая проверка на админа, не отправляет сообщений."""
-    member = await bot.get_chat_member(chat.id, user_id)
-    return member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+# --- ЦЕНТРАЛЬНОЕ ХРАНИЛИЩЕ КЭШЕЙ ---
+# Оба кэша теперь определены здесь, чтобы избежать циклических импортов.
+stop_words_cache = {}
+triggers_cache = {}
+
 
 @router.message(F.text)
 async def message_filter(message: types.Message, bot: Bot, log_action: callable):

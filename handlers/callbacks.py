@@ -53,12 +53,23 @@ async def get_main_settings_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="❗️ Предупреждения", callback_data="menu:warns"),
-        InlineKeyboardButton(text="🚫 Блокировки", callback_data="menu:blocks")
+        InlineKeyboardButton(text="📝 Контент", callback_data="menu:content") # Объединим заметки и триггеры сюда
     )
     builder.row(
         InlineKeyboardButton(text="✅ Закрыть", callback_data="menu:close"),
-        InlineKeyboardButton(text="➡️ Другие", callback_data="menu:other")
+        InlineKeyboardButton(text="🚫 Блокировки", callback_data="menu:blocks")
     )
+    return builder.as_markup()
+
+async def get_content_settings_keyboard() -> InlineKeyboardMarkup:
+    """Создает меню настроек контента."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🚫 Стоп-слова", callback_data="menu:stopwords"),
+        InlineKeyboardButton(text="🤖 Триггеры", callback_data="menu:triggers"),
+        InlineKeyboardButton(text="🗒️ Заметки", callback_data="menu:notes")
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main"))
     return builder.as_markup()
 
 async def get_rules_menu(chat_id: int):
@@ -141,7 +152,6 @@ async def get_blocks_menu():
     return text, builder.as_markup()
 
 async def get_notes_menu(chat_id: int):
-    """Создает текст и клавиатуру для меню заметок."""
     notes = await get_all_notes(chat_id)
     text = "🗒️ **Управление заметками**\n\nТекущий список:\n"
     if notes:
@@ -158,7 +168,6 @@ async def get_notes_menu(chat_id: int):
     return text, builder.as_markup()
 
 async def get_triggers_menu(chat_id: int):
-    """Создает текст и клавиатуру для меню триггеров."""
     triggers = await get_all_triggers(chat_id)
     text = "🤖 **Управление триггерами**\n\nТекущий список:\n"
     if triggers:
@@ -213,7 +222,12 @@ async def get_moderation_settings_keyboard(chat_id: int) -> InlineKeyboardMarkup
 # --- ОБРАБОТЧИКИ НАВИГАЦИИ ПО МЕНЮ ---
 
 @router.callback_query(F.data.startswith("menu:"))
-async def handle_menu_navigation(callback: types.CallbackQuery, state: FSMContext):
+async def handle_menu_navigation(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    # --- ИСПРАВЛЕНИЕ: Добавляем проверку на админа в самом начале ---
+    member = await bot.get_chat_member(callback.message.chat.id, callback.from_user.id)
+    if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
+        return await callback.answer("Это меню доступно только для администраторов.", show_alert=True)
+
     await state.clear()
     menu_type = callback.data.split(":")[1]
     chat_id = callback.message.chat.id
@@ -236,6 +250,9 @@ async def handle_menu_navigation(callback: types.CallbackQuery, state: FSMContex
         text, keyboard = await get_warns_menu(chat_id)
     elif menu_type == "blocks":
         text, keyboard = await get_blocks_menu()
+    elif menu_type == "content":
+        text = "📝 **Настройки контента**"
+        keyboard = await get_content_settings_keyboard()
     elif menu_type == "notes":
         text, keyboard = await get_notes_menu(chat_id)
     elif menu_type == "triggers":
@@ -245,7 +262,7 @@ async def handle_menu_navigation(callback: types.CallbackQuery, state: FSMContex
     elif menu_type == "close":
         await callback.message.delete()
         return await callback.answer()
-    else: # Заглушка
+    else:
         builder = InlineKeyboardBuilder()
         builder.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main"))
         keyboard = builder.as_markup()
@@ -447,9 +464,9 @@ async def process_del_stop_word(message: types.Message, state: FSMContext, bot: 
     await return_to_menu(message, state, get_stopwords_menu, bot)
 
 @router.message(SettingsStates.waiting_for_note_name_to_add)
-async def process_add_note_name(message: types.Message, state: FSMContext):
+async def process_add_note_name(message: types.Message, state: FSMContext, bot: Bot):
     await state.update_data(note_name=message.text.lower().split()[0])
-    await message.delete() # Удаляем имя заметки
+    await message.delete()
     menu_message_id = (await state.get_data()).get("menu_message_id")
     await bot.edit_message_text("Отлично. Теперь отправьте содержимое заметки.", chat_id=message.chat.id, message_id=menu_message_id)
     await state.set_state(SettingsStates.waiting_for_note_content)
@@ -476,21 +493,21 @@ async def process_add_note_content(message: types.Message, state: FSMContext, bo
 async def process_del_note(message: types.Message, state: FSMContext, bot: Bot, log_action: callable):
     name = message.text.lower().split()[0]
     if await delete_note(message.chat.id, name):
-        await message.answer(f"✅ Заметка `#{name}` удалена.")
+        confirmation_msg = await message.answer(f"✅ Заметка `#{name}` удалена.")
+        asyncio.create_task(delete_message_after_delay(confirmation_msg, 5))
         log_text = (f"🗑 <b>Удалена заметка</b>\n"
                     f"<b>Админ:</b> {message.from_user.mention_html()}\n"
                     f"<b>Имя:</b> #{name}")
         await log_action(message.chat.id, log_text, bot)
     else:
-        await message.answer("Такой заметки не существует.")
+        error_msg = await message.answer("Такой заметки не существует.")
+        asyncio.create_task(delete_message_after_delay(error_msg, 5))
         
-    await state.clear()
-    text, keyboard = await get_notes_menu(message.chat.id)
-    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    await return_to_menu(message, state, get_notes_menu, bot)
 
 # --- Обработчики для Триггеров ---
 @router.message(SettingsStates.waiting_for_trigger_keyword_to_add)
-async def process_add_trigger_keyword(message: types.Message, state: FSMContext):
+async def process_add_trigger_keyword(message: types.Message, state: FSMContext, bot: Bot):
     await state.update_data(trigger_keyword=message.text.lower())
     await message.delete()
     menu_message_id = (await state.get_data()).get("menu_message_id")

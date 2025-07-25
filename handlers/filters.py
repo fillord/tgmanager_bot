@@ -5,6 +5,7 @@ import logging
 from aiogram import Router, F, types, Bot
 
 from db.requests import get_chat_settings, get_stop_words, get_all_triggers
+# ИМПОРТИРУЕМ ИЗ ПРАВИЛЬНОГО МЕСТА
 from .utils import is_user_admin_silent
 
 router = Router()
